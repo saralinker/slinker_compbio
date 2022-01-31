@@ -1,0 +1,193 @@
+---
+title: "Clinical_gene_summary"
+author: "Slinker"
+date: "1/28/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+### USER INPUTS
+dir = "/Volumes/orrd-wrd-to/c366pf06873600/C3661001/Personalis/"
+outdir <- "~/Documents/projects/CDK246/CDK246_tables/"
+id = "C3661001"
+genelist <- scan(file = "~/Documents/projects/CDK246/Feng_Zhou_genelist_cdk246.txt", what = "character")
+#############
+
+outfile_tpm <- paste0(outdir, id, "_tpm_generated_", Sys.Date(), ".txt")
+outfile_counts <- paste0(outdir, id, "_counts_generated_", Sys.Date(), ".txt")
+outfile_snv <- paste0(outdir, id, "_mutations_generated_", Sys.Date(), ".txt")
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = dir)
+library(dplyr)
+```
+```{r functions}
+patient_sample_split <- function(symphony_dir){
+  lapply(X = symphony_dir, FUN = function(x){
+  nm2 <- list.dirs(x, recursive = FALSE  )
+  nm <- strsplit(nm2, split = "/", fixed = T) %>% do.call("rbind",.)
+  if(grep(pattern = "_", x = nm[,2], fixed = T) %>% length() > 0){
+    nm <- strsplit(nm[,2], split = "_", fixed = T) %>% do.call("rbind",.) %>% data.frame()
+    colnames(nm) <- c("patient", "sample")
+    nm$dir <- x
+    #nm$file <- nm2
+  }else{nm <- NA}
+  return(nm)
+})
+}
+```
+
+## get directory structure
+
+```{r}
+symphony_dir <- dir(path = ".", pattern = "Symphony*", full.names = F)
+patient_sample <- patient_sample_split(symphony_dir) %>% do.call("rbind", .) %>% na.exclude()
+```
+
+## get directory structure
+
+```{r subfiles}
+rna_sub <- c("RNA_Pipeline/Gene_Expression_Reports/tsv/","*tsv")
+dna_sub <- c("DNA_Pipeline/Annotated_SmallVariant_Reports/Preferred_Transcripts/tsv/","*somatic_dna_small_variant_report_all.tsv")
+cnv_amp_sub <- c("DNA_Pipeline/Annotated_CopyNumber_Reports/tsv/","*_somatic_dna_gene_cna_report_AMP.tsv")
+cnv_del_sub <- c("DNA_Pipeline/Annotated_CopyNumber_Reports/tsv/","_somatic_dna_gene_cna_report_DEL.tsv")
+
+patient_sample[,"RNA_tsv"] <- NA
+patient_sample[,"DNA_tsv"] <- NA
+patient_sample[,"CNV_amp_tsv"] <- NA
+patient_sample[,"CNV_del_tsv"] <- NA
+for(i in 1:nrow(patient_sample)){
+  a <- list.files(paste0(patient_sample$file[i], "/", rna_sub[1]), pattern = rna_sub[2], full.names = T, recursive = F)
+  if(length(a) == 0){ a <- NA}
+  patient_sample[i,"RNA_tsv"] <- a
+  
+  a <- list.files(paste0(patient_sample$file[i], "/",dna_sub[1]), pattern = dna_sub[2], full.names = T, recursive = F)
+  if(length(a) == 0){ a <- NA}
+  patient_sample[i,"DNA_tsv"] <- a
+  
+  a <- list.files(paste0(patient_sample$file[i], "/",cnv_amp_sub[1]), pattern = cnv_amp_sub[2], full.names = T, recursive = F)
+  if(length(a) == 0){ a <- NA}
+  patient_sample[i,"CNV_amp_tsv"] <- a
+  
+  a <- list.files(paste0(patient_sample$file[i], "/",cnv_del_sub[1]), pattern = cnv_del_sub[2], full.names = T, recursive = F)
+  if(length(a) == 0){ a <- NA}
+  patient_sample[i,"CNV_del_tsv"] <- a
+}
+```
+
+
+## TPM and COUNTS tables
+
+```{r make TPM and counts files, echo=FALSE}
+i <- 1
+file <- patient_sample[i,"RNA_tsv"]
+tmp <- read.delim(file, header = T)
+COUNTS <- TPM <- matrix(data = 0, nrow = length(genelist), ncol = nrow(patient_sample), dimnames = list(
+  genelist, 
+  paste(patient_sample$patient, patient_sample$sample, sep = "_")          
+)) %>% data.frame()
+GENE_CONV <- tmp[,c(1:2)] 
+  
+for(i in 1:nrow(patient_sample)){
+  nm <- paste(patient_sample[i,"patient"],patient_sample[i,"sample"] ,  sep = "_")
+  file <- patient_sample[i,"RNA_tsv"]
+  tmp <- read.delim(file, header = T)
+  TPM[,nm] <- tmp[match(genelist, tmp$Gene.Symbol),"TPM"]
+  COUNTS[,nm] <- tmp[match(genelist, tmp$Gene.Symbol),"RNA.Seq.Raw.Counts"]
+}
+
+
+```
+
+```{r make SNV files, echo=FALSE}
+
+SNV <- matrix(NA, nrow = length(genelist), ncol = nrow(patient_sample), dimnames = list(
+  genelist, paste(patient_sample[,"patient"],patient_sample[,"sample"] ,  sep = "_")
+  
+))
+
+for(i in 1:nrow(patient_sample)){
+  file <- patient_sample[i,"DNA_tsv"]
+  nm <- paste(patient_sample[i,"patient"],patient_sample[i,"sample"] ,  sep = "_")
+  if(!is.na(file)){
+    tmp <- read.delim(file, header = T)
+    tmp <- tmp[tmp$Gene.Symbol %in% genelist  ,c("Gene.Symbol","Protein.Variant")] %>% unique()
+    
+    for(g in unique(tmp$Gene.Symbol)){
+        if(sum(tmp$Gene.Symbol == g) > 1){
+          a <- paste(tmp[tmp$Gene.Symbol == g, "Protein.Variant"],collapse=  ",")
+        }else{
+          a <- tmp[tmp$Gene.Symbol == g, "Protein.Variant"]
+        }
+      SNV[g,nm] <- a
+    }
+  }else{
+    SNV[,nm] <- NA
+  }
+  
+}
+SNV[is.na(SNV)] <- ""
+
+
+
+```
+
+```{r amp}
+for(i in 1:nrow(patient_sample)){
+  file <- patient_sample[i,"CNV_amp_tsv"]
+  nm <- paste(patient_sample[i,"patient"],patient_sample[i,"sample"] ,  sep = "_")
+  if(!is.na(file)){
+    tmp <- read.delim(file, header = T)
+    tmp <- tmp[tmp$Gene.Symbol %in% genelist   ,c("Gene.Symbol","CNA.Type","AbsoluteCN")] %>% unique()
+    
+    for(g in unique(tmp$Gene.Symbol)){
+      a <- paste(tmp[tmp$Gene.Symbol == g, c("CNA.Type","AbsoluteCN")],collapse = ":")
+      b <- SNV[g,nm]
+      if(b != ""){
+      b <- paste(b, a, sep = ",")
+      }else{
+        b <- a
+      }
+      SNV[g,nm] <- b
+    }
+  }else{
+    SNV[,nm] <- NA
+  }
+  
+}
+SNV[is.na(SNV)] <- ""
+```
+
+```{r del}
+for(i in 1:nrow(patient_sample)){
+  file <- patient_sample[i,"CNV_del_tsv"]
+  nm <- paste(patient_sample[i,"patient"],patient_sample[i,"sample"] ,  sep = "_")
+  if(!is.na(file)){
+    tmp <- read.delim(file, header = T)
+    tmp <- tmp[tmp$Gene.Symbol %in% genelist   ,c("Gene.Symbol","CNA.Type","AbsoluteCN")] %>% unique()
+    
+    for(g in unique(tmp$Gene.Symbol)){
+      a <- paste(tmp[tmp$Gene.Symbol == g, c("CNA.Type","AbsoluteCN")],collapse = ":")
+      b <- SNV[g,nm]
+      if(b != ""){
+      b <- paste(b, a, sep = ",")
+      }else{
+        b <- a
+      }
+      SNV[g,nm] <- b
+    }
+  }else{
+    SNV[,nm] <- NA
+  }
+  
+}
+SNV[is.na(SNV)] <- ""
+SNV <- cbind(rownames(SNV), SNV)
+colnames(SNV)[1] <- "Gene.Symbol"
+```
+
+```{r output}
+
+write.table(x = TPM, file = outfile_tpm , quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(x = COUNTS, file = outfile_counts , quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(x = SNV, file = outfile_snv , quote = FALSE, sep = "\t", row.names = FALSE)
+```
